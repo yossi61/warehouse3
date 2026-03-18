@@ -505,38 +505,17 @@ function setSyncUI(state) {
 }
 
 function pushToCloud() {
-  // שולח לענן בלי לשנות את חותמת הזמן
-  _lastSaveTime = Date.now();
   setSyncUI('syncing');
   const payload = JSON.stringify(mainDataOnly());
-  const myModified = data.lastModified || 0;
-  try { fetch(SYNC_URL, {method:'POST', mode:'no-cors', body: payload}); } catch(e) {}
-  // אימות ברקע – אם לא הגיע לענן, שולח שוב
-  verifyAndRetry(payload, myModified, 0);
-}
-
-async function verifyAndRetry(payload, myModified, attempt) {
-  if(attempt >= 4) { setSyncUI(navigator.onLine ? 'error' : 'offline'); return; }
-  await new Promise(r => setTimeout(r, 3000));
-  try {
-    const res = await fetch(SYNC_URL + '?t=' + Date.now());
-    const cloud = await res.json();
-    const cd = parseCloudData(cloud);
-    if(cd && (cd.lastModified || 0) >= myModified) {
-      lastSyncHash = JSON.stringify(mainDataOnly());
-      setSyncUI('synced');
-      return;
-    }
-  } catch(e) {}
-  // לא אומת – שולח שוב
-  try { fetch(SYNC_URL, {method:'POST', mode:'no-cors', body: payload}); } catch(e) {}
-  verifyAndRetry(payload, myModified, attempt + 1);
+  fetch(SYNC_URL, {method:'POST', mode:'no-cors', body: payload})
+    .then(() => setSyncUI('synced'))
+    .catch(() => setSyncUI(navigator.onLine ? 'error' : 'offline'));
 }
 
 function save() {
-  // נקרא רק בפעולות משתמש — מעדכן חותמת זמן
   data.lastModified = Date.now();
   saveLocal();
+  _lastSaveTime = Date.now();
   pushToCloud();
 }
 
@@ -553,24 +532,23 @@ async function load() {
   const saved = localStorage.getItem('warehouse_data');
   if(saved) { try { data = JSON.parse(saved); } catch(e){} }
   const localImgs = extractImages();
-  const localTime = data.lastModified || 0;
   try {
     const res = await fetch(SYNC_URL + '?t=' + Date.now());
     const cloud = await res.json();
     const cd = parseCloudData(cloud);
     if(cd) {
       const cloudTime = cd.lastModified || 0;
-      if(localTime > cloudTime) {
-        // הנתונים המקומיים חדשים יותר — דוחפים לענן בלי לשנות חותמת זמן
-        lastSyncHash = JSON.stringify(mainDataOnly());
-        pushToCloud();
-      } else {
-        // הענן חדש יותר או שווה — משתמשים בענן
+      const localTime = data.lastModified || 0;
+      if(cloudTime > localTime) {
+        // הענן חדש יותר – משתמשים בענן
         data = cd;
         applyImages(localImgs);
         saveLocal();
-        lastSyncHash = JSON.stringify(cd);
+      } else if(localTime > cloudTime) {
+        // המקומי חדש יותר – דוחפים לענן (בלי לשנות _lastSaveTime)
+        pushToCloud();
       }
+      // שווים – אין שינוי
     }
     setSyncUI('synced');
   } catch(e){
@@ -581,7 +559,7 @@ async function load() {
 }
 
 async function pollCloud() {
-  if(Date.now() - _lastSaveTime < 12000) return;
+  if(Date.now() - _lastSaveTime < 20000) return;
   try {
     const res = await fetch(SYNC_URL + '?t=' + Date.now());
     const cloud = await res.json();
@@ -590,12 +568,10 @@ async function pollCloud() {
       const cloudTime = cd.lastModified || 0;
       const localTime = data.lastModified || 0;
       if(cloudTime > localTime) {
-        // הענן חדש יותר — סביר שמכשיר אחר עדכן (דליה/יוסי)
         const localImgs = extractImages();
         data = cd;
         applyImages(localImgs);
         saveLocal();
-        lastSyncHash = JSON.stringify(cd);
         renderAll();
         setSyncUI('synced');
       }
